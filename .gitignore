@@ -1,6 +1,7 @@
 # Custom
 scs.py
 outs/
+graphs/
 
 # Byte-compiled / optimized / DLL files
 *__pycache__/
