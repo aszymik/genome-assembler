@@ -1,7 +1,7 @@
 import DBG
 import utils
 
-def main(reads_path: str, output_path: str, k: int, kmer_thresh: int=3, tip_thresh: int=2, similarity_thresh: int=3):
+def main(reads_path: str, output_path: str, k: int, kmer_thresh: int=2, tip_thresh: int=7, similarity_thresh: int=3):
     reads = utils.load_reads(reads_path)
     kmerhist = DBG.kmerHist(reads, k)  # generate k-mer histogram
     reads_corrected = [DBG.correct1mm(read, k, kmerhist, kmer_thresh) for read in reads]  # change infrequent to frequent k-mers
@@ -17,4 +17,4 @@ def main(reads_path: str, output_path: str, k: int, kmer_thresh: int=3, tip_thre
     utils.save_contigs(contigs, output_path)
     
 if __name__ == '__main__':
-    main('training/reads/reads3.fasta', 'outs/reads3_contigs', 21)
+    main('training/reads/reads1.fasta', 'outs/reads1_contigs', 15)
