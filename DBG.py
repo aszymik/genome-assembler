@@ -1,5 +1,9 @@
 import graphviz
 
+# TODO:
+# improve extract_contigs
+# correct remove_tips and remove_bubbles
+
 def kmerHist(reads, k):
     """ Return k-mer histogram and average # k-mer occurrences """
     kmerhist = {}
@@ -22,10 +26,12 @@ def neighbors1mm(kmer, alpha):
 def correct1mm(read, k, kmerhist, thresh, alpha=['A','C', 'G','T']):
     """
     Return an error-corrected version of read.  
-    :param k: k-mer length.
-    :param kmerhist: k-mer count map.
-    :param thresh: count threshold above which k-mer is considered correct.
-    :param alpha: alphabet.
+
+    Args:
+        k: k-mer length.
+        kmerhist: k-mer count map.
+        thresh: count threshold above which k-mer is considered correct.
+        alpha: alphabet.
     """
     # Iterate over k-mers in read
     for i in range(len(read)-(k-1)):
@@ -215,3 +221,84 @@ def extract_contigs_greedy(de_bruijn_graph):
                 current_node = next_node
             contigs.append(contig)
     return contigs
+
+def remove_tips(de_bruijn_graph, tip_length_threshold):
+    """
+    Remove tips from a De Bruijn graph.
+
+    Args:
+        de_bruijn_graph: A DeBruijnGraph object.
+        tip_length_threshold: Maximum length for a tip to be removed.
+
+    Returns:
+        Modified DeBruijnGraph object.
+    """
+    to_remove = set()
+    for node in de_bruijn_graph.nodes.values():
+        if node.nout == 0 or node.nin == 0:  # Dead-end nodes
+            path_length = 0
+            current_node = node
+            while current_node and path_length <= tip_length_threshold:
+                if current_node in to_remove:
+                    break
+                to_remove.add(current_node)
+                if current_node.nout > 0:
+                    current_node = de_bruijn_graph.G[current_node][0]
+                else:
+                    current_node = None
+                path_length += 1
+            if path_length > tip_length_threshold:
+                to_remove.difference_update(to_remove)
+
+    for node in to_remove:
+        try:
+            del de_bruijn_graph.G[node]
+            del de_bruijn_graph.nodes[node.km1mer]
+        except KeyError:
+            pass
+    return de_bruijn_graph
+
+
+def remove_bubbles(reads, de_bruijn_graph, k, similarity_threshold):
+    """
+    Remove bubbles from a De Bruijn graph.
+
+    Args:
+        de_bruijn_graph: A DeBruijnGraph object.
+        similarity_threshold: Maximum allowed distance between paths to be considered a bubble.
+
+    Returns:
+        Modified DeBruijnGraph object.
+    """
+    kmerhist = kmerHist(reads, k)
+    for node in de_bruijn_graph.nodes.values():
+        if len(de_bruijn_graph.G[node]) > 1:  # Multiple outgoing paths
+            paths = []
+            for dst in de_bruijn_graph.G[node]:
+                current_path = dst.km1mer
+                current_node = dst
+                while current_node and current_node.nout == 1:
+                    current_node = de_bruijn_graph.G[current_node][0]
+                    current_path += current_node.km1mer[-1]
+                paths.append(current_path)
+
+            for i in range(len(paths)):
+                for j in range(i + 1, len(paths)):
+                    if hamming_distance(paths[i], paths[j]) <= similarity_threshold:
+                        # Remove the less frequent path
+                        freq_i = sum([kmerhist[kmer] for kmer in paths[i]])
+                        freq_j = sum([kmerhist[kmer] for kmer in paths[j]])
+                        to_remove = paths[i] if freq_i < freq_j else paths[j]
+                        for kmer in to_remove:
+                            try:
+                                del de_bruijn_graph.nodes[kmer]
+                            except KeyError:
+                                pass
+    return de_bruijn_graph
+
+
+def hamming_distance(s1, s2):
+    """
+    Calculate the Hamming distance between two strings.
+    """
+    return sum(c1 != c2 for c1, c2 in zip(s1, s2))
