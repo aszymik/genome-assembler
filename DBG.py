@@ -1,5 +1,47 @@
 import graphviz
 
+def kmerHist(reads, k):
+    """ Return k-mer histogram and average # k-mer occurrences """
+    kmerhist = {}
+    for read in reads:
+        for kmer in [ read[i:i+k] for i in range(len(read)-(k-1)) ]:
+            kmerhist[kmer] = kmerhist.get(kmer, 0) + 1
+    return kmerhist
+
+
+def neighbors1mm(kmer, alpha):
+    """ Generate all neighbors at Hamming distance 1 from kmer """
+    neighbors = []
+    for j in range(len(kmer)-1, -1, -1):
+        oldc = kmer[j]
+        for c in alpha:
+            if c == oldc: continue
+            neighbors.append(kmer[:j] + c + kmer[j+1:])
+    return neighbors
+
+def correct1mm(read, k, kmerhist, thresh, alpha=['A','C', 'G','T']):
+    """
+    Return an error-corrected version of read.  
+    :param k: k-mer length.
+    :param kmerhist: k-mer count map.
+    :param thresh: count threshold above which k-mer is considered correct.
+    :param alpha: alphabet.
+    """
+    # Iterate over k-mers in read
+    for i in range(len(read)-(k-1)):
+        kmer = read[i:i+k]
+        # If k-mer is infrequent...
+        if kmerhist.get(kmer, 0) <= thresh:
+            # Look for a frequent neighbor
+            for newkmer in neighbors1mm(kmer, alpha):
+                if kmerhist.get(newkmer, 0) > thresh:
+                    # Found a frequent neighbor; replace old kmer
+                    # with neighbor
+                    read = read[:i] + newkmer + read[i+k:]
+                    break
+    # Return possibly-corrected read
+    return read
+
 class DeBruijnGraph:
     """ De Bruijn directed multigraph built from a collection of
         strings. User supplies strings and k-mer length k.  Nodes
@@ -144,3 +186,32 @@ class DeBruijnGraph2(DeBruijnGraph):
                 for dst in dsts:
                     g.edge(src.km1mer, dst.km1mer)
         return g
+    
+def extract_contigs_greedy(de_bruijn_graph):
+    """
+    Extracts contigs from a de Bruijn graph using a greedy approach.
+
+    Args:
+        de_bruijn_graph: A DeBruijnGraph object.
+
+    Returns:
+        A list of contig strings.
+    """
+    contigs = []
+    visited_nodes = set()
+
+    for node in de_bruijn_graph.nodes.values():
+        if node not in visited_nodes:
+            contig = node.km1mer
+            visited_nodes.add(node)
+            current_node = node
+
+            while current_node in de_bruijn_graph.G and \
+                  de_bruijn_graph.G[current_node] and \
+                  de_bruijn_graph.G[current_node][0] not in visited_nodes:
+                next_node = de_bruijn_graph.G[current_node][0]
+                contig += next_node.km1mer[-1]
+                visited_nodes.add(next_node)
+                current_node = next_node
+            contigs.append(contig)
+    return contigs
