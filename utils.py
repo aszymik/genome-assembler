@@ -10,7 +10,7 @@ def load_reads(reads_path: str) -> List[str]:
 
 def save_contigs(contigs: List[str], output_path: str) -> None:
     with open(output_path, 'w') as out_file:
-        for contig in contigs:
+        for i, contig in enumerate(contigs):
+            out_file.write(f'>contig_{i}\n')
             out_file.write(contig + '\n')
-
-print(load_reads('training/reads/reads1.fasta'))
+            
