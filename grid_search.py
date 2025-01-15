@@ -61,9 +61,9 @@ sweep_config = {
     "metric": {"name": "score", "goal": "maximize"},
     "parameters": {
         "k": {"values": list(range(13, 37, 2))},
-        "kmer_thresh": {"values": [2, 3, 4]},
-        "tip_thresh": {"values": [2, 3, 4]},
-        "similarity_thresh": {"values": [2, 3, 4]},
+        "kmer_thresh": {"values": [1, 2, 3]},
+        "tip_thresh": {"values": list(range(1, 11))},
+        "similarity_thresh": {"values": list(range(1, 11))},
     }
 }
 
