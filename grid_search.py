@@ -2,7 +2,6 @@ import wandb
 import assembly
 import subprocess
 
-
 # Weak:
 # reads_coverage
 # fragmentation_score
@@ -19,12 +18,13 @@ def evaluate_model(config=None):
         # Parameters from the sweep
         k = config.k
         kmer_thresh = config.kmer_thresh
-        tip_thresh = config.tip_thresh
-        similarity_thresh = config.similarity_thresh
+        weight_thresh = config.weight_thresh
+        # similarity_thresh = config.similarity_thresh
+        similarity_thresh = 3
 
         
         # Evaluate the model
-        scores = get_scores(k, kmer_thresh, tip_thresh, similarity_thresh)
+        scores = get_scores(k, kmer_thresh, weight_thresh, similarity_thresh)
 
         # Log metrics
         wandb.log({
@@ -36,11 +36,11 @@ def evaluate_model(config=None):
         })
 
 
-def get_scores(k, kmer_thresh, tip_thresh, similarity_thresh):
+def get_scores(k, kmer_thresh, weight_thresh, similarity_thresh):
     """
     Run the assembly program and calculate score.
     """
-    assembly.main('training/reads/reads1.fasta', 'outs/reads1_contigs', k=k, kmer_thresh=kmer_thresh, tip_thresh=tip_thresh, similarity_thresh=similarity_thresh)
+    assembly.main('training/reads/reads1.fasta', 'outs/reads1_contigs', k=k, kmer_thresh=kmer_thresh, weight_thresh=weight_thresh, similarity_thresh=similarity_thresh)
     result = subprocess.run(['./evaluate.sh', 'outs/reads1_contigs'], capture_output=True)
 
     # Decode subprocess output
@@ -61,14 +61,14 @@ sweep_config = {
     "metric": {"name": "score", "goal": "maximize"},
     "parameters": {
         "k": {"values": list(range(13, 37, 2))},
-        "kmer_thresh": {"values": [1, 2, 3]},
-        "tip_thresh": {"values": list(range(1, 11))},
-        "similarity_thresh": {"values": list(range(1, 11))},
+        "kmer_thresh": {"values": list(range(1, 8))},
+        "weight_thresh": {"values": list(range(1, 6))},
+        # "similarity_thresh": {"values": list(range(1, 11))},
     }
 }
 
-# wandb.login()
-# sweep_id = wandb.sweep(sweep_config, project='genome-assembler')
-# wandb.agent(sweep_id, function=evaluate_model)
+wandb.login()
+sweep_id = wandb.sweep(sweep_config, project='genome-assembler')
+wandb.agent(sweep_id, function=evaluate_model)
 
 
