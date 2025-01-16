@@ -69,6 +69,7 @@ class DeBruijnGraph:
             self.km1mer = km1mer
             self.nin = 0
             self.nout = 0
+            self.parents = set()
 
         def isSemiBalanced(self):
             return abs(self.nin - self.nout) == 1
@@ -85,30 +86,36 @@ class DeBruijnGraph:
     def __init__(self, strIter, k, circularize=False):
         """ Build de Bruijn multigraph given string iterator and k-mer
             length k """
-        self.G = {}     # multimap from nodes to neighbors
-        self.nodes = {} # maps k-1-mers to Node objects
+        self.G = {}     # Forward graph: {Node: {neighbor: weight}}
+        self.reverse_G = {}  # Reverse graph: {Node: {parent: weight}}
+        self.nodes = {} # Maps k-1-mers to Node objects
+        
         for st in strIter:
             if circularize:
-                st += st[:k-1]
+                st += st[:k - 1]
             for kmer, km1L, km1R in self.chop(st, k):
-                nodeL, nodeR = None, None
-                if km1L in self.nodes:
-                    nodeL = self.nodes[km1L]
-                else:
-                    nodeL = self.nodes[km1L] = self.Node(km1L)
-                if km1R in self.nodes:
-                    nodeR = self.nodes[km1R]
-                else:
-                    nodeR = self.nodes[km1R] = self.Node(km1R)
+                nodeL = self.nodes.setdefault(km1L, self.Node(km1L))
+                nodeR = self.nodes.setdefault(km1R, self.Node(km1R))
+                
+                # Update edge weights in forward graph
+                if nodeL not in self.G:
+                    self.G[nodeL] = {}
+                self.G[nodeL][nodeR] = self.G[nodeL].get(nodeR, 0) + 1
+
+                # Update edge weights in reverse graph
+                if nodeR not in self.reverse_G:
+                    self.reverse_G[nodeR] = {}
+                self.reverse_G[nodeR][nodeL] = self.reverse_G[nodeR].get(nodeL, 0) + 1
+
+                # Update node properties
                 nodeL.nout += 1
                 nodeR.nin += 1
-                self.G.setdefault(nodeL, []).append(nodeR)
+                nodeR.parents.add(nodeL)
+
         # Iterate over nodes; tally # balanced, semi-balanced, neither
         self.nsemi, self.nbal, self.nneither = 0, 0, 0
-        # Keep track of head and tail nodes in the case of a graph with
-        # Eularian walk (not cycle)
         self.head, self.tail = None, None
-        for node in iter(self.nodes.values()):
+        for node in self.nodes.values():
             if node.isBalanced():
                 self.nbal += 1
             elif node.isSemiBalanced():
@@ -119,6 +126,178 @@ class DeBruijnGraph:
                 self.nsemi += 1
             else:
                 self.nneither += 1
+
+    def get_edge_weight(self, nodeL, nodeR):
+        """ Return the weight of the edge from nodeL to nodeR. """
+        return self.G.get(nodeL, {}).get(nodeR, 0)
+
+    def get_ancestors(self, node):
+        """ Return the ancestors of a node. """
+        return list(self.reverse_G.get(node, {}).keys())
+
+    def __str__(self):
+        """ For debugging: print the forward and reverse graphs. """
+        forward = "\n".join(
+            f"{str(u)} -> {str(v)} [weight={weight}]"
+            for u, neighbors in self.G.items()
+            for v, weight in neighbors.items()
+        )
+        reverse = "\n".join(
+            f"{str(v)} <- {str(u)} [weight={weight}]"
+            for v, parents in self.reverse_G.items()
+            for u, weight in parents.items()
+        )
+        return f"Forward Graph:\n{forward}\n\nReverse Graph:\n{reverse}" 
+    
+    def remove_tips(self, weight_threshold):
+        """ Remove tips from the graph.
+        
+        Args:
+            weight_threshold (int): The maximum weight for an edge to be considered a tip.
+        """
+        removed = True  # To keep track of whether we removed a tip in the last iteration
+
+        while removed:
+            removed = False
+
+            # Find and remove forward tips (nodes with 0 outgoing edges)
+            forward_tips = [node for node in self.nodes.values() 
+                            if node.nout == 0 and any(w <= weight_threshold for w in self.reverse_G.get(node, {}).values())]
+            for tip in forward_tips:
+                # Remove edges pointing to this tip
+                for parent in self.get_ancestors(tip):
+                    weight = self.reverse_G[tip].pop(parent, 0)
+                    if weight:
+                        self.G[parent][tip] -= weight
+                        if self.G[parent][tip] == 0:
+                            del self.G[parent][tip]
+                        parent.nout -= 1
+                # Remove the tip node
+                try:
+                    del self.reverse_G[tip]
+                    del self.G[tip]
+                    del self.nodes[tip.km1mer]
+                except KeyError:
+                    pass
+                removed = True
+
+            # Find and remove reverse tips (nodes with 0 incoming edges)
+            reverse_tips = [node for node in self.nodes.values()
+                            if node.nin == 0 and any(w <= weight_threshold for w in self.G.get(node, {}).values())]
+            for tip in reverse_tips:
+                # Remove edges originating from this tip
+                for child, weight in list(self.G.get(tip, {}).items()):
+                    if weight:
+                        self.G[tip].pop(child, 0)
+                        self.reverse_G[child][tip] -= weight
+                        if self.reverse_G[child][tip] == 0:
+                            del self.reverse_G[child][tip]
+                        child.nin -= 1
+                # Remove the tip node
+                try:
+                    del self.G[tip]
+                    del self.reverse_G[tip]
+                    del self.nodes[tip.km1mer]
+                except KeyError:
+                    pass
+                removed = True
+
+    def remove_bubbles(self):
+        """Remove bubbles from the graph by identifying diverging and converging paths."""
+        removed = True  # Track if bubbles are removed
+
+        while removed:
+            removed = False
+
+            for node in list(self.nodes.values()):
+                # Check if the node is a divergence point (more than one outgoing edge)
+                if len(self.G.get(node, {})) > 1:
+                    # Find all paths starting from this node
+                    paths = self._find_paths_from_node(node)
+                    if not paths:
+                        continue
+
+                    # Identify the convergence point and remove redundant paths
+                    convergence_point = self._find_convergence_point(paths)
+                    if convergence_point:
+                        # Select the best path and remove others
+                        self._resolve_bubble(paths, convergence_point)
+                        removed = True
+
+    def _find_paths_from_node(self, start_node, max_depth=100):
+        """Find all paths starting from a node up to a maximum depth."""
+        paths = []
+        stack = [(start_node, [start_node])]  # (current_node, path_so_far)
+
+        while stack:
+            current_node, path = stack.pop()
+
+            # Stop exploring if we exceed max depth
+            if len(path) > max_depth:
+                continue
+
+            # Check for convergence point
+            if len(path) > 1 and len(self.G.get(current_node, {})) == 0:
+                paths.append(path)
+                continue
+
+            # Add neighbors to the stack
+            for neighbor in self.G.get(current_node, {}):
+                if neighbor not in path:  # Avoid cycles
+                    stack.append((neighbor, path + [neighbor]))
+
+        return paths
+
+    def _find_convergence_point(self, paths):
+        """Find the first node that all paths re-converge to."""
+        if not paths:
+            return None
+
+        # Use sets to track nodes in each path
+        sets = [set(path) for path in paths]
+
+        # Find common nodes among all paths
+        common_nodes = set.intersection(*sets)
+        if not common_nodes:
+            return None
+
+        # Return the first common node in any path as the convergence point
+        for node in paths[0]:
+            if node in common_nodes:
+                return node
+        return None
+
+    def _resolve_bubble(self, paths, convergence_point):
+        """Remove redundant paths in a bubble."""
+        # Evaluate paths and select the best one
+        path_scores = [(path, self._evaluate_path(path)) for path in paths]
+        path_scores.sort(key=lambda x: x[1], reverse=True)  # Sort by score (higher is better)
+
+        best_path = path_scores[0][0]
+        redundant_paths = [path for path, _ in path_scores[1:]]
+
+        # Remove edges of redundant paths
+        for path in redundant_paths:
+            for i in range(len(path) - 1):
+                node, next_node = path[i], path[i + 1]
+                weight = self.G[node].pop(next_node, 0)
+                if weight:
+                    self.reverse_G[next_node].pop(node, 0)
+                    node.nout -= weight
+                    next_node.nin -= weight
+                if not self.G[node]:
+                    del self.G[node]
+                if not self.reverse_G[next_node]:
+                    del self.reverse_G[next_node]
+
+    def _evaluate_path(self, path):
+        """Evaluate a path based on cumulative edge weight."""
+        score = 0
+        for i in range(len(path) - 1):
+            node, next_node = path[i], path[i + 1]
+            score += self.G.get(node, {}).get(next_node, 0)
+        return score
+
 
     def nnodes(self):
         """ Return # nodes """
@@ -171,6 +350,7 @@ class DeBruijnGraph:
         # Return node list
         return list(map(str, tour))
 
+
 class DeBruijnGraph2(DeBruijnGraph):
     def to_dot(self, weights=False):
         """ Return string with graphviz representation.  If 'weights'
@@ -193,6 +373,35 @@ class DeBruijnGraph2(DeBruijnGraph):
                     g.edge(src.km1mer, dst.km1mer)
         return g
     
+# def extract_contigs_greedy(de_bruijn_graph):
+#     """
+#     Extracts contigs from a de Bruijn graph using a greedy approach.
+
+#     Args:
+#         de_bruijn_graph: A DeBruijnGraph object.
+
+#     Returns:
+#         A list of contig strings.
+#     """
+#     contigs = []
+#     visited_nodes = set()
+
+#     for node in de_bruijn_graph.nodes.values():
+#         if node not in visited_nodes:
+#             contig = node.km1mer
+#             visited_nodes.add(node)
+#             current_node = node
+
+#             while current_node in de_bruijn_graph.G and \
+#                   de_bruijn_graph.G[current_node] and \
+#                   de_bruijn_graph.G[current_node][0] not in visited_nodes:
+#                 next_node = de_bruijn_graph.G[current_node][0]
+#                 contig += next_node.km1mer[-1]
+#                 visited_nodes.add(next_node)
+#                 current_node = next_node
+#             contigs.append(contig)
+#     return contigs
+
 def extract_contigs_greedy(de_bruijn_graph):
     """
     Extracts contigs from a de Bruijn graph using a greedy approach.
@@ -213,12 +422,15 @@ def extract_contigs_greedy(de_bruijn_graph):
             current_node = node
 
             while current_node in de_bruijn_graph.G and \
-                  de_bruijn_graph.G[current_node] and \
-                  de_bruijn_graph.G[current_node][0] not in visited_nodes:
-                next_node = de_bruijn_graph.G[current_node][0]
+                  de_bruijn_graph.G[current_node]:  # Check if the node has outgoing edges
+                # Get the first unvisited neighbor
+                next_node = next(iter(de_bruijn_graph.G[current_node].keys()))
+                if next_node in visited_nodes:
+                    break
                 contig += next_node.km1mer[-1]
                 visited_nodes.add(next_node)
                 current_node = next_node
+
             contigs.append(contig)
     return contigs
 
