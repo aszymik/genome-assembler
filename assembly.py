@@ -1,16 +1,24 @@
 import DBG
 import utils
+import numpy as np
+import math
 
-def main(reads_path: str, output_path: str, k: int, kmer_thresh: int=2, weight_thresh: int=1, similarity_thresh: int=3):
+def main(reads_path: str, output_path: str, k: int=19, expected_coverage: float=6.0):
     reads = utils.load_reads(reads_path)
     kmerhist = DBG.kmerHist(reads, k)  # generate k-mer histogram
+    kmer_thresh = math.floor(np.mean(list(kmerhist.values())))  # calculate k-mer thershold for read correction
     reads_corrected = [DBG.correct1mm(read, k, kmerhist, kmer_thresh) for read in reads]  # change infrequent to frequent k-mers
     
     dbg = DBG.DeBruijnGraph(reads_corrected, k)
-    dbg.remove_tips(weight_thresh)
-    # dbg.remove_bubbles()
-    # dbg = DBG.remove_bubbles(reads, dbg, k, similarity_thresh)
 
+    weights = []
+    for node in dbg.G:
+        for neighbor in dbg.G[node]:
+            weights.append(dbg.G[node][neighbor])
+
+    weight_thresh = max(math.floor(np.mean(weights) - expected_coverage), 0)
+
+    dbg.remove_tips(weight_thresh)
     contigs = DBG.extract_contigs_greedy(dbg)
 
     # graph = DBG.DeBruijnGraph2(reads_corrected, k).to_dot(weights=True)
@@ -19,4 +27,6 @@ def main(reads_path: str, output_path: str, k: int, kmer_thresh: int=2, weight_t
     utils.save_contigs(contigs, output_path)
     
 if __name__ == '__main__':
-    main('training/reads/reads3.fasta', 'outs/reads3_contigs', 15)
+    main('training/reads/reads1.fasta', 'outs/reads1_contigs')
+    main('training/reads/reads2.fasta', 'outs/reads2_contigs')
+    main('training/reads/reads3.fasta', 'outs/reads3_contigs')

@@ -1,4 +1,4 @@
-import graphviz
+# import graphviz
 
 # TODO:
 # improve extract_contigs
@@ -351,27 +351,27 @@ class DeBruijnGraph:
         return list(map(str, tour))
 
 
-class DeBruijnGraph2(DeBruijnGraph):
-    def to_dot(self, weights=False):
-        """ Return string with graphviz representation.  If 'weights'
-            is true, label edges corresponding to distinct k-1-mers
-            with weights, instead of drawing separate edges for
-            k-1-mer copies. """
-        g = graphviz.Digraph(comment='DeBruijn graph')
-        for node in iter(self.G.keys()):
-            g.node(node.km1mer, node.km1mer)
-        for src, dsts in iter(self.G.items()):
-            if weights:
-                weightmap = {}
-                if weights:
-                    for dst in dsts:
-                        weightmap[dst] = weightmap.get(dst, 0) + 1
-                for dst, v in weightmap.items():
-                    g.edge(src.km1mer, dst.km1mer, label=str(v))
-            else:
-                for dst in dsts:
-                    g.edge(src.km1mer, dst.km1mer)
-        return g
+# class DeBruijnGraph2(DeBruijnGraph):
+#     def to_dot(self, weights=False):
+#         """ Return string with graphviz representation.  If 'weights'
+#             is true, label edges corresponding to distinct k-1-mers
+#             with weights, instead of drawing separate edges for
+#             k-1-mer copies. """
+#         g = graphviz.Digraph(comment='DeBruijn graph')
+#         for node in iter(self.G.keys()):
+#             g.node(node.km1mer, node.km1mer)
+#         for src, dsts in iter(self.G.items()):
+#             if weights:
+#                 weightmap = {}
+#                 if weights:
+#                     for dst in dsts:
+#                         weightmap[dst] = weightmap.get(dst, 0) + 1
+#                 for dst, v in weightmap.items():
+#                     g.edge(src.km1mer, dst.km1mer, label=str(v))
+#             else:
+#                 for dst in dsts:
+#                     g.edge(src.km1mer, dst.km1mer)
+#         return g
     
 # def extract_contigs_greedy(de_bruijn_graph):
 #     """
