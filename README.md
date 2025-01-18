@@ -54,4 +54,4 @@ Before running make sure to install all requirements listed in `requirements.txt
 
 ### Evaluate
 
-1 `./evaluate.sh <path_to_file_containing_contigs>`
+`./evaluate.sh <path_to_file_containing_contigs>`
