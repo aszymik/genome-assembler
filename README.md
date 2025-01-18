@@ -48,9 +48,9 @@ contigs are constructed from a de Bruijn graph by greedily traversing its nodes 
 Before running make sure to install all requirements listed in `requirements.txt`
 
 ### Assemble
-`./assambly <path_to_reads> <output_path>`
+`./assembly <path_to_reads> <output_path>`
 
-`python assambly.py <path_to_reads> <output_path>`
+`python assembly.py <path_to_reads> <output_path>`
 
 ### Evaluate
 
