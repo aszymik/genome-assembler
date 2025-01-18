@@ -1,0 +1,4 @@
+bowtie2
+numpy
+pysam
+Bio

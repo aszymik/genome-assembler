@@ -1,8 +1,4 @@
-import graphviz
-
-# TODO:
-# improve extract_contigs
-# correct remove_tips and remove_bubbles
+import numpy as np
 
 def kmerHist(reads, k):
     """ Return k-mer histogram and average # k-mer occurrences """
@@ -69,6 +65,7 @@ class DeBruijnGraph:
             self.km1mer = km1mer
             self.nin = 0
             self.nout = 0
+            self.parents = set()
 
         def isSemiBalanced(self):
             return abs(self.nin - self.nout) == 1
@@ -85,30 +82,36 @@ class DeBruijnGraph:
     def __init__(self, strIter, k, circularize=False):
         """ Build de Bruijn multigraph given string iterator and k-mer
             length k """
-        self.G = {}     # multimap from nodes to neighbors
-        self.nodes = {} # maps k-1-mers to Node objects
+        self.G = {}     # Forward graph: {Node: {neighbor: weight}}
+        self.reverse_G = {}  # Reverse graph: {Node: {parent: weight}}
+        self.nodes = {} # Maps k-1-mers to Node objects
+        
         for st in strIter:
             if circularize:
-                st += st[:k-1]
+                st += st[:k - 1]
             for kmer, km1L, km1R in self.chop(st, k):
-                nodeL, nodeR = None, None
-                if km1L in self.nodes:
-                    nodeL = self.nodes[km1L]
-                else:
-                    nodeL = self.nodes[km1L] = self.Node(km1L)
-                if km1R in self.nodes:
-                    nodeR = self.nodes[km1R]
-                else:
-                    nodeR = self.nodes[km1R] = self.Node(km1R)
+                nodeL = self.nodes.setdefault(km1L, self.Node(km1L))
+                nodeR = self.nodes.setdefault(km1R, self.Node(km1R))
+                
+                # Update edge weights in forward graph
+                if nodeL not in self.G:
+                    self.G[nodeL] = {}
+                self.G[nodeL][nodeR] = self.G[nodeL].get(nodeR, 0) + 1
+
+                # Update edge weights in reverse graph
+                if nodeR not in self.reverse_G:
+                    self.reverse_G[nodeR] = {}
+                self.reverse_G[nodeR][nodeL] = self.reverse_G[nodeR].get(nodeL, 0) + 1
+
+                # Update node properties
                 nodeL.nout += 1
                 nodeR.nin += 1
-                self.G.setdefault(nodeL, []).append(nodeR)
+                nodeR.parents.add(nodeL)
+
         # Iterate over nodes; tally # balanced, semi-balanced, neither
         self.nsemi, self.nbal, self.nneither = 0, 0, 0
-        # Keep track of head and tail nodes in the case of a graph with
-        # Eularian walk (not cycle)
         self.head, self.tail = None, None
-        for node in iter(self.nodes.values()):
+        for node in self.nodes.values():
             if node.isBalanced():
                 self.nbal += 1
             elif node.isSemiBalanced():
@@ -119,6 +122,85 @@ class DeBruijnGraph:
                 self.nsemi += 1
             else:
                 self.nneither += 1
+
+    def __str__(self):
+        """ For debugging: print the forward and reverse graphs. """
+        forward = "\n".join(
+            f"{str(u)} -> {str(v)} [weight={weight}]"
+            for u, neighbors in self.G.items()
+            for v, weight in neighbors.items()
+        )
+        reverse = "\n".join(
+            f"{str(v)} <- {str(u)} [weight={weight}]"
+            for v, parents in self.reverse_G.items()
+            for u, weight in parents.items()
+        )
+        return f"Forward Graph:\n{forward}\n\nReverse Graph:\n{reverse}"
+    
+    def get_mean_edge_weight(self):
+        """ Return the mean of weights of all edges in the graph. """
+        weights = []
+        for node in self.G:
+            for neighbor in self.G[node]:
+                weights.append(self.G[node][neighbor])
+        return np.mean(weights)
+
+    def get_ancestors(self, node):
+        """ Return the ancestors of a node. """
+        return list(self.reverse_G.get(node, {}).keys()) 
+    
+    def remove_tips(self, weight_threshold):
+        """ Remove tips from the graph.
+        
+        Args:
+            weight_threshold (int): The maximum weight for an edge to be considered a tip.
+        """
+        removed = True  # to keep track of whether we removed a tip in the last iteration
+
+        while removed:
+            removed = False
+
+            # Find and remove forward tips (nodes with 0 outgoing edges)
+            forward_tips = [node for node in self.nodes.values() 
+                            if node.nout == 0 and any(w <= weight_threshold for w in self.reverse_G.get(node, {}).values())]
+            for tip in forward_tips:
+                # Remove edges pointing to this tip
+                for parent in self.get_ancestors(tip):
+                    weight = self.reverse_G[tip].pop(parent, 0)
+                    if weight:
+                        self.G[parent][tip] -= weight
+                        if self.G[parent][tip] == 0:
+                            del self.G[parent][tip]
+                        parent.nout -= 1
+                # Remove the tip node
+                try:
+                    del self.reverse_G[tip]
+                    del self.G[tip]
+                    del self.nodes[tip.km1mer]
+                except KeyError:
+                    pass
+                removed = True
+
+            # Find and remove reverse tips (nodes with 0 incoming edges)
+            reverse_tips = [node for node in self.nodes.values()
+                            if node.nin == 0 and any(w <= weight_threshold for w in self.G.get(node, {}).values())]
+            for tip in reverse_tips:
+                # Remove edges originating from this tip
+                for child, weight in list(self.G.get(tip, {}).items()):
+                    if weight:
+                        self.G[tip].pop(child, 0)
+                        self.reverse_G[child][tip] -= weight
+                        if self.reverse_G[child][tip] == 0:
+                            del self.reverse_G[child][tip]
+                        child.nin -= 1
+                # Remove the tip node
+                try:
+                    del self.G[tip]
+                    del self.reverse_G[tip]
+                    del self.nodes[tip.km1mer]
+                except KeyError:
+                    pass
+                removed = True
 
     def nnodes(self):
         """ Return # nodes """
@@ -171,28 +253,7 @@ class DeBruijnGraph:
         # Return node list
         return list(map(str, tour))
 
-class DeBruijnGraph2(DeBruijnGraph):
-    def to_dot(self, weights=False):
-        """ Return string with graphviz representation.  If 'weights'
-            is true, label edges corresponding to distinct k-1-mers
-            with weights, instead of drawing separate edges for
-            k-1-mer copies. """
-        g = graphviz.Digraph(comment='DeBruijn graph')
-        for node in iter(self.G.keys()):
-            g.node(node.km1mer, node.km1mer)
-        for src, dsts in iter(self.G.items()):
-            if weights:
-                weightmap = {}
-                if weights:
-                    for dst in dsts:
-                        weightmap[dst] = weightmap.get(dst, 0) + 1
-                for dst, v in weightmap.items():
-                    g.edge(src.km1mer, dst.km1mer, label=str(v))
-            else:
-                for dst in dsts:
-                    g.edge(src.km1mer, dst.km1mer)
-        return g
-    
+
 def extract_contigs_greedy(de_bruijn_graph):
     """
     Extracts contigs from a de Bruijn graph using a greedy approach.
@@ -213,92 +274,14 @@ def extract_contigs_greedy(de_bruijn_graph):
             current_node = node
 
             while current_node in de_bruijn_graph.G and \
-                  de_bruijn_graph.G[current_node] and \
-                  de_bruijn_graph.G[current_node][0] not in visited_nodes:
-                next_node = de_bruijn_graph.G[current_node][0]
+                  de_bruijn_graph.G[current_node]:  # Check if the node has outgoing edges
+                # Get the first unvisited neighbor
+                next_node = next(iter(de_bruijn_graph.G[current_node].keys()))
+                if next_node in visited_nodes:
+                    break
                 contig += next_node.km1mer[-1]
                 visited_nodes.add(next_node)
                 current_node = next_node
+
             contigs.append(contig)
     return contigs
-
-def remove_tips(de_bruijn_graph, tip_length_threshold):
-    """
-    Remove tips from a De Bruijn graph.
-
-    Args:
-        de_bruijn_graph: A DeBruijnGraph object.
-        tip_length_threshold: Maximum length for a tip to be removed.
-
-    Returns:
-        Modified DeBruijnGraph object.
-    """
-    to_remove = set()
-    for node in de_bruijn_graph.nodes.values():
-        if node.nout == 0 or node.nin == 0:  # Dead-end nodes
-            path_length = 0
-            current_node = node
-            while current_node and path_length <= tip_length_threshold:
-                if current_node in to_remove:
-                    break
-                to_remove.add(current_node)
-                if current_node.nout > 0:
-                    current_node = de_bruijn_graph.G[current_node][0]
-                else:
-                    current_node = None
-                path_length += 1
-            if path_length > tip_length_threshold:
-                to_remove.difference_update(to_remove)
-
-    for node in to_remove:
-        try:
-            del de_bruijn_graph.G[node]
-            del de_bruijn_graph.nodes[node.km1mer]
-        except KeyError:
-            pass
-    return de_bruijn_graph
-
-
-def remove_bubbles(reads, de_bruijn_graph, k, similarity_threshold):
-    """
-    Remove bubbles from a De Bruijn graph.
-
-    Args:
-        de_bruijn_graph: A DeBruijnGraph object.
-        similarity_threshold: Maximum allowed distance between paths to be considered a bubble.
-
-    Returns:
-        Modified DeBruijnGraph object.
-    """
-    kmerhist = kmerHist(reads, k)
-    for node in de_bruijn_graph.nodes.values():
-        if len(de_bruijn_graph.G[node]) > 1:  # Multiple outgoing paths
-            paths = []
-            for dst in de_bruijn_graph.G[node]:
-                current_path = dst.km1mer
-                current_node = dst
-                while current_node and current_node.nout == 1:
-                    current_node = de_bruijn_graph.G[current_node][0]
-                    current_path += current_node.km1mer[-1]
-                paths.append(current_path)
-
-            for i in range(len(paths)):
-                for j in range(i + 1, len(paths)):
-                    if hamming_distance(paths[i], paths[j]) <= similarity_threshold:
-                        # Remove the less frequent path
-                        freq_i = sum([kmerhist[kmer] for kmer in paths[i]])
-                        freq_j = sum([kmerhist[kmer] for kmer in paths[j]])
-                        to_remove = paths[i] if freq_i < freq_j else paths[j]
-                        for kmer in to_remove:
-                            try:
-                                del de_bruijn_graph.nodes[kmer]
-                            except KeyError:
-                                pass
-    return de_bruijn_graph
-
-
-def hamming_distance(s1, s2):
-    """
-    Calculate the Hamming distance between two strings.
-    """
-    return sum(c1 != c2 for c1, c2 in zip(s1, s2))
